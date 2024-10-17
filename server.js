@@ -8,7 +8,7 @@ const path = require("path");
 const nodemailer = require("nodemailer");
 const fs = require("fs");
 const smtpTransport = require("nodemailer-smtp-transport");
-const axios = require('axios'); // Добавлено для отправки запросов
+const axios = require('axios');
 
 dotenv.config();
 
@@ -203,7 +203,7 @@ const keepAlive = () => {
         } catch (error) {
             console.error('Ошибка при отправке ping:', error.message);
         }
-    }, 40000);
+    }, 30000);
 };
 
 keepAlive(); 
