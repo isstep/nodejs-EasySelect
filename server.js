@@ -8,6 +8,7 @@ const path = require("path");
 const nodemailer = require("nodemailer");
 const fs = require("fs");
 const smtpTransport = require("nodemailer-smtp-transport");
+const axios = require('axios'); // Добавлено для отправки запросов
 
 dotenv.config();
 
@@ -40,14 +41,13 @@ app.use(express.urlencoded({ extended: true }));
 
 const JWT_SECRET = process.env.JWT_SECRET;
 
-
 const transporter = nodemailer.createTransport({
-    host: 'smtp.gmail.com' ,
+    host: 'smtp.gmail.com',
     port: 465,
     secure: true,
     auth: {
-        user: process.env.EMAIL_USER, 
-        pass: process.env.EMAIL_PASS, 
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS,
     },
 });
 
@@ -68,7 +68,6 @@ const sendVerificationEmail = async (email, userId) => {
         console.error('Ошибка при отправке письма:', error.message);
     }
 };
-
 
 app.post('/signup', async (req, res) => {
     const { firstName, lastName, address, phoneNumber, email, password, confirmPassword } = req.body;
@@ -100,7 +99,7 @@ app.post('/signup', async (req, res) => {
             email,
             password: hashedPassword,
             createdAt: admin.firestore.FieldValue.serverTimestamp(),
-            isVerified: false, 
+            isVerified: false,
         };
 
         const userDoc = await usersRef.add(newUser);
@@ -168,7 +167,6 @@ app.post('/login', async (req, res) => {
     }
 });
 
-
 const authenticateToken = (req, res, next) => {
     const authHeader = req.headers['authorization'];
 
@@ -190,6 +188,25 @@ const authenticateToken = (req, res, next) => {
 app.get('/protected', authenticateToken, (req, res) => {
     res.json({ message: "Доступ разрешён.", user: req.user });
 });
+
+
+app.get('/ping', (req, res) => {
+    res.status(200).send('Server is active');
+});
+
+
+const keepAlive = () => {
+    setInterval(async () => {
+        try {
+            await axios.get('https://nodejs-server-sfel.onrender.com/ping'); 
+            console.log('Ping успешно отправлен');
+        } catch (error) {
+            console.error('Ошибка при отправке ping:', error.message);
+        }
+    }, 40000);
+};
+
+keepAlive(); 
 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
