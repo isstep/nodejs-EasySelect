@@ -172,7 +172,7 @@ body {
         <p>Пожалуйста, нажмите на кнопку ниже, чтобы подтвердить свой аккаунт:</p>
     </div>
     <div class="button-container">
-        <a href="${verificationLink}" class="button">
+        <a href="${verificationLink}" class="button" style="color: white !important; text-decoration: none !important;">
             Подтвердить аккаунт
         </a>
     </div>
