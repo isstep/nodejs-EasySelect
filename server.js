@@ -147,7 +147,7 @@ body {
 .footer {
     text-align: left;
     font-size: 0.875rem;
-    color: #05461484;
+    color:rgba(0, 0, 0, 0.37);
     margin-top: 32px;
 }
 
