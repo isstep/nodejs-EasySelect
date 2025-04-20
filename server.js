@@ -48,7 +48,7 @@ const transporter = nodemailer.createTransport({
     },
 });
 
-const REDIRECT_URL = 'https://easy-select.vercel.app/';  
+const REDIRECT_URL = 'https://easy-select.vercel.app/succses';  
 
 
 const sendVerificationEmail = async (email, userId) => {
