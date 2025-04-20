@@ -130,6 +130,7 @@ body {
     transition: background-color 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
     border: none;
     cursor: pointer;
+    text-decoration: none;
     box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
 }
 
