@@ -7,7 +7,6 @@ const dotenv = require("dotenv");
 const path = require("path");
 const nodemailer = require("nodemailer");
 const fs = require("fs");
-const smtpTransport = require("nodemailer-smtp-transport");
 const axios = require('axios');
 
 dotenv.config();
@@ -42,9 +41,7 @@ app.use(express.urlencoded({ extended: true }));
 const JWT_SECRET = process.env.JWT_SECRET;
 
 const transporter = nodemailer.createTransport({
-    host: 'smtp.gmail.com',
-    port: 465,
-    secure: true,
+    host: 'gmail',  
     auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS,
@@ -52,13 +49,13 @@ const transporter = nodemailer.createTransport({
 });
 
 const sendVerificationEmail = async (email, userId) => {
-    const verificationLink = `http://localhost:8080/verify-email?uid=${userId}`;
+    const verificationLink = `https://nodejs-server-sfel.onrender.com/verify-email?uid=${userId}`;
 
     const mailOptions = {
         from: process.env.EMAIL_USER,
         to: email,
         subject: 'Подтверждение регистрации',
-        text: `Пожалуйста, подтвердите вашу регистрацию, перейдя по следующей ссылке: ${verificationLink}`,
+        html: `<p>Пожалуйста, подтвердите вашу регистрацию, перейдя по следующей ссылке:</p><a href="${verificationLink}">${verificationLink}</a>`, // Используем HTML для более красивой ссылки
     };
 
     try {
@@ -126,6 +123,10 @@ app.get('/verify-email', async (req, res) => {
             return res.status(404).json({ error: "Пользователь не найден." });
         }
 
+        if (userDoc.data().isVerified) {
+            return res.status(400).json({ error: "Email уже был подтвержден." }); 
+        }
+
         await db.collection('users').doc(uid).update({ isVerified: true });
 
         res.status(200).json({ message: "Email подтвержден успешно!" });
@@ -152,6 +153,10 @@ app.post('/login', async (req, res) => {
 
         const userDoc = snapshot.docs[0];
         const userData = userDoc.data();
+
+        if (!userData.isVerified) {
+            return res.status(403).json({ error: "Пожалуйста, подтвердите свой email, прежде чем войти." });
+        }
 
         const isMatch = await bcrypt.compare(password, userData.password);
         if (!isMatch) {
