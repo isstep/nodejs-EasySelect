@@ -8,7 +8,7 @@ const path = require("path");
 const nodemailer = require("nodemailer");
 const fs = require("fs");
 const axios = require('axios');
-
+const { verificationEmailTemplate } = require('./emailTemplates');
 dotenv.config();
 
 const requiredEnvVars = ['JWT_SECRET', 'FIREBASE_PROJECT_ID', 'EMAIL_USER', 'EMAIL_PASS'];
@@ -58,7 +58,7 @@ const sendVerificationEmail = async (email, userId) => {
         from: '<easyselectbot@gmail.com>',
         to: email,
         subject: 'Подтверждение регистрации',
-        html: `<p>Пожалуйста, подтвердите вашу регистрацию, перейдя по следующей ссылке:</p><a href="${verificationLink}">${verificationLink}</a>`
+        html: verificationEmailTemplate(verificationLink)
     };
 
     try {
