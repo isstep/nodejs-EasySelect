@@ -41,7 +41,7 @@ app.use(express.urlencoded({ extended: true }));
 const JWT_SECRET = process.env.JWT_SECRET;
 
 const transporter = nodemailer.createTransport({
-    host: 'gmail',  
+    host: 'smtp.gmail.com',  
     auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS,
@@ -53,7 +53,7 @@ const sendVerificationEmail = async (email, userId) => {
 
     const mailOptions = {
         from: '<easyselectbot@gmail.com>',
-        to: 'vzeldak07@gmail.com',
+        to: email,
         subject: 'Подтверждение регистрации',
         html: `<p>Пожалуйста, подтвердите вашу регистрацию, перейдя по следующей ссылке:</p><a href="${verificationLink}">${verificationLink}</a>`
     };
