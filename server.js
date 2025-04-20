@@ -48,6 +48,9 @@ const transporter = nodemailer.createTransport({
     },
 });
 
+const REDIRECT_URL = 'https://easy-select.vercel.app/';  
+
+
 const sendVerificationEmail = async (email, userId) => {
     const verificationLink = `https://nodejs-server-sfel.onrender.com/verify-email?uid=${userId}`;
 
@@ -124,15 +127,16 @@ app.get('/verify-email', async (req, res) => {
         }
 
         if (userDoc.data().isVerified) {
-            return res.status(400).json({ error: "Email уже был подтвержден." }); 
+             return res.redirect(`${REDIRECT_URL}?message=Email already verified`);
         }
 
         await db.collection('users').doc(uid).update({ isVerified: true });
 
-        res.status(200).json({ message: "Email подтвержден успешно!" });
+        return res.redirect(`${REDIRECT_URL}?message=Email verified successfully`);
+
     } catch (error) {
         console.error('Ошибка при подтверждении email:', error.message);
-        res.status(500).json({ error: "Ошибка сервера." });
+        return res.redirect(`${REDIRECT_URL}?error=Server error during verification`);
     }
 });
 
