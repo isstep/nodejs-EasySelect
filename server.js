@@ -53,7 +53,7 @@ const sendVerificationEmail = async (email, userId) => {
 
     const mailOptions = {
         from: '<easyselectbot@gmail.com>',
-        to: email,
+        to: 'vzeldak07@gmail.com',
         subject: 'Подтверждение регистрации',
         html: `<p>Пожалуйста, подтвердите вашу регистрацию, перейдя по следующей ссылке:</p><a href="${verificationLink}">${verificationLink}</a>`
     };
@@ -208,7 +208,7 @@ const keepAlive = () => {
         } catch (error) {
             console.error('Ошибка при отправке ping:', error.message);
         }
-    }, 30000);
+    }, 49000);
 };
 
 keepAlive(); 
