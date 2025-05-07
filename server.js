@@ -310,9 +310,7 @@ app.post("/login", async (req, res) => {
     if (!userData.isVerified) {
       return res
         .status(403)
-        .json({
-          error: "Пожалуйста, подтвердите свой email, прежде чем войти.",
-        });
+        .json({ error: "Пожалуйста, подтвердите свой email, прежде чем войти." });
     }
 
     const isMatch = await bcrypt.compare(password, userData.password);
@@ -325,8 +323,9 @@ app.post("/login", async (req, res) => {
       JWT_SECRET,
       { expiresIn: "1h" }
     );
+    const { password: _, ...safeUserData } = userData;
 
-    res.json({ token });
+    res.json({ token, user: { uid: userDoc.id, ...safeUserData } });
   } catch (error) {
     console.error("Ошибка при логине:", error.message);
     res.status(500).json({ error: "Внутренняя ошибка сервера." });
