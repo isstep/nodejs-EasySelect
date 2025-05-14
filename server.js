@@ -59,7 +59,7 @@ const sendVerificationEmail = async (email, userId) => {
   const verificationLink = `https://nodejs-server-sfel.onrender.com/verify-email?uid=${userId}`;
 
   const mailOptions = {
-    from: "<easyselectbot@gmail.com>",
+    from: "EasySelect <eaewfeefweot@123.com>",
     to: email,
     subject: "Подтверждение регистрации",
     html: `<!DOCTYPE html>
