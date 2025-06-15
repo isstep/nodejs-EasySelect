@@ -10,6 +10,23 @@ const fs = require("fs");
 const axios = require("axios");
 const crypto = require("crypto");
 const winston = require("winston");
+const {
+  Document,
+  Packer,
+  Paragraph,
+  TextRun,
+  Table,
+  TableRow,
+  TableCell,
+  WidthType,
+  HeadingLevel,
+  AlignmentType,
+  ImageRun,
+  SectionType,
+  Header,
+  Footer,
+  PageNumber,
+} = require("docx");
 
 dotenv.config();
 
@@ -150,12 +167,10 @@ app.post("/signup", async (req, res) => {
     };
     const userDoc = await usersRef.add(newUser);
     await sendVerificationEmail(email, userDoc.id);
-    res
-      .status(201)
-      .json({
-        message:
-          "Пользователь зарегистрирован успешно. Проверьте почту для подтверждения.",
-      });
+    res.status(201).json({
+      message:
+        "Пользователь зарегистрирован успешно. Проверьте почту для подтверждения.",
+    });
   } catch (error) {
     logger.error("Ошибка при регистрации:", {
       error: error.message,
@@ -213,11 +228,9 @@ app.post("/login", async (req, res) => {
     const userDoc = snapshot.docs[0];
     const userData = userDoc.data();
     if (!userData.isVerified) {
-      return res
-        .status(403)
-        .json({
-          error: "Пожалуйста, подтвердите свой email, прежде чем войти.",
-        });
+      return res.status(403).json({
+        error: "Пожалуйста, подтвердите свой email, прежде чем войти.",
+      });
     }
     const isMatch = await bcrypt.compare(password, userData.password);
     if (!isMatch) {
@@ -318,12 +331,10 @@ app.post("/orders", authenticateToken, async (req, res) => {
       logger.warn(
         `У пользователя ${userId} не указан адрес в профиле при создании заказа.`
       );
-      return res
-        .status(400)
-        .json({
-          error:
-            "Адрес доставки не указан в вашем профиле. Пожалуйста, обновите данные.",
-        });
+      return res.status(400).json({
+        error:
+          "Адрес доставки не указан в вашем профиле. Пожалуйста, обновите данные.",
+      });
     }
     const randomDigits = Math.floor(Math.random() * 900 + 100).toString();
     const randomHexChar = crypto.randomBytes(1).toString("hex")[0];
@@ -332,14 +343,28 @@ app.post("/orders", authenticateToken, async (req, res) => {
     const orderData = {
       orderId: generatedOrderId,
       userId,
+      userEmail: userData.email,
       foods,
       totalPrice,
       address: userAddress,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      status: "pending",
+      status: "pending", // Initial status
     };
     const newOrderRef = db.collection("orders").doc();
     await newOrderRef.set(orderData);
+
+    const logOrderCreation = {
+      type: "order_creation",
+      orderId: generatedOrderId,
+      userId: userId,
+      userEmail: userData.email,
+      totalPrice: orderData.totalPrice,
+      address: orderData.address,
+      status: "created",
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+    };
+    await db.collection("processed_activity_log").add(logOrderCreation);
+
     logger.info(
       `Заказ с ID #${generatedOrderId} для пользователя ${userId} успешно создан. Адрес: ${userAddress}`
     );
@@ -352,6 +377,17 @@ app.post("/orders", authenticateToken, async (req, res) => {
       stack: error.stack,
       userId,
     });
+    const logOrderFailure = {
+      type: "order_creation_failed",
+      userId: userId,
+      error: error.message,
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+    };
+    try {
+      await db.collection("processed_activity_log").add(logOrderFailure);
+    } catch (logError) {
+      logger.error("Ошибка при логировании неудачи создания заказа:", logError);
+    }
     res
       .status(500)
       .json({ error: "Внутренняя ошибка сервера при создании заказа." });
@@ -401,12 +437,10 @@ app.get("/orders", authenticateToken, async (req, res) => {
       logger.error(
         "ОШИБКА FIRESTORE: Требуется композитный индекс для /orders. Ссылка для создания должна быть в предыдущем логе ошибки."
       );
-      return res
-        .status(500)
-        .json({
-          error:
-            "Ошибка базы данных: отсутствует необходимый индекс. Проверьте логи сервера.",
-        });
+      return res.status(500).json({
+        error:
+          "Ошибка базы данных: отсутствует необходимый индекс. Проверьте логи сервера.",
+      });
     }
     res
       .status(500)
@@ -577,12 +611,10 @@ app.post(
       logger.error(
         `[${requestId}] Ошибка OSRM при расчете матрицы расстояний.`
       );
-      return res
-        .status(503)
-        .json({
-          error:
-            "Ошибка сервиса маршрутизации. Не удалось рассчитать все сегменты.",
-        });
+      return res.status(503).json({
+        error:
+          "Ошибка сервиса маршрутизации. Не удалось рассчитать все сегменты.",
+      });
     }
 
     const { minDistance: tspMinDistance, bestPathIndices } =
@@ -635,6 +667,22 @@ app.post(
     }
 
     const finalFuelCost = calculateFuelCost(totalActualRouteDistance);
+
+    const logRouteProcessing = {
+      type: "route_processing",
+      requestId: requestId,
+      adminUserId: req.user.uid,
+      pointsCount: points.length,
+      optimalPointOrderNames: bestPathIndices.map(
+        (index) => points[index].name
+      ),
+      calculatedDistance: parseFloat(totalActualRouteDistance.toFixed(2)),
+      calculatedFuelCost: parseFloat(finalFuelCost.toFixed(2)),
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+      status: "success",
+    };
+    await db.collection("processed_activity_log").add(logRouteProcessing);
+
     logger.info(
       `[${requestId}] Маршрут рассчитан: ${totalActualRouteDistance.toFixed(2)} км, топливо: ${finalFuelCost.toFixed(2)}`
     );
@@ -649,21 +697,509 @@ app.post(
   }
 );
 
-// Заглушки для справочников
-let serverBases = [{ id: "base_default_1", name: "Центральный склад" }];
-app.get("/api/logistics/bases", authenticateToken, isAdmin, (req, res) => {
-  res.json(serverBases);
+const geocodeAddressOnServer = async (address) => {
+  try {
+    const response = await axios.get(
+      `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}&addressdetails=1&limit=1&countrycodes=by,ru`
+    );
+    if (!response.data || response.data.length === 0) {
+      logger.warn(`Nominatim (server): No results for address: ${address}`);
+      return null;
+    }
+    const item = response.data[0];
+    return {
+      geocodedAddress: item.display_name,
+      lat: parseFloat(item.lat),
+      lon: parseFloat(item.lon),
+    };
+  } catch (error) {
+    logger.error(
+      `Nominatim (server) geocoding error for address "${address}": ${error.message}`
+    );
+    return null;
+  }
+};
+
+app.get(
+  "/api/logistics/bases",
+  authenticateToken,
+  isAdmin,
+  async (req, res) => {
+    try {
+      const basesSnapshot = await db
+        .collection("logistics_bases")
+        .orderBy("name")
+        .get();
+      const basesList = basesSnapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data(),
+      }));
+      res.json(basesList);
+    } catch (error) {
+      logger.error("Ошибка получения списка баз из Firestore:", error);
+      res.status(500).json({ error: "Не удалось получить список баз." });
+    }
+  }
+);
+
+app.post(
+  "/api/logistics/bases",
+  authenticateToken,
+  isAdmin,
+  async (req, res) => {
+    const { name, address } = req.body;
+    if (!name || typeof name !== "string" || name.trim() === "") {
+      return res.status(400).json({ error: "Название базы обязательно." });
+    }
+    if (!address || typeof address !== "string" || address.trim() === "") {
+      return res.status(400).json({ error: "Адрес базы обязателен." });
+    }
+
+    try {
+      const geocoded = await geocodeAddressOnServer(address.trim());
+      if (!geocoded) {
+        return res
+          .status(400)
+          .json({
+            error: `Не удалось геокодировать адрес: ${address}. Проверьте корректность адреса.`,
+          });
+      }
+
+      const newBaseData = {
+        name: name.trim(),
+        addressString: address.trim(),
+        geocodedAddress: geocoded.geocodedAddress,
+        lat: geocoded.lat,
+        lon: geocoded.lon,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+      const newBaseRef = await db
+        .collection("logistics_bases")
+        .add(newBaseData);
+
+      await db.collection("processed_activity_log").add({
+        type: "base_added",
+        baseId: newBaseRef.id,
+        baseName: newBaseData.name,
+        adminUserId: req.user.uid,
+        timestamp: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      logger.info(
+        `Добавлена база: ${newBaseData.name} по адресу: ${newBaseData.addressString} (ID: ${newBaseRef.id})`
+      );
+      res.status(201).json({ id: newBaseRef.id, ...newBaseData });
+    } catch (error) {
+      logger.error("Ошибка добавления базы в Firestore:", error);
+      res.status(500).json({ error: "Не удалось добавить базу." });
+    }
+  }
+);
+
+let serverVehicles = [{ id: "vehicle_default_1", name: "Газель A123BC" }];
+app.get("/api/logistics/vehicles", authenticateToken, isAdmin, (req, res) => {
+  res.json(serverVehicles);
 });
-app.post("/api/logistics/bases", authenticateToken, isAdmin, (req, res) => {
+app.post("/api/logistics/vehicles", authenticateToken, isAdmin, (req, res) => {
   const { name } = req.body;
   if (!name || typeof name !== "string" || name.trim() === "") {
-    return res.status(400).json({ error: "Название базы обязательно." });
+    return res.status(400).json({ error: "Название/номер ТС обязательно." });
   }
-  const newBase = { id: `base_${Date.now()}`, name: name.trim() };
-  serverBases.push(newBase);
-  logger.info(`Добавлена база: ${newBase.name}`);
-  res.status(201).json(newBase);
+  const newVehicle = { id: `vehicle_${Date.now()}`, name: name.trim() };
+  serverVehicles.push(newVehicle);
+  logger.info(`Добавлено ТС: ${newVehicle.name}`);
+  res.status(201).json(newVehicle);
 });
+
+app.get("/api/admin/orders", authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const ordersRef = db.collection("orders");
+    const snapshot = await ordersRef
+      .where("status", "!=", "delivered")
+      .orderBy("status")
+      .orderBy("createdAt", "desc")
+      .get();
+
+    if (snapshot.empty) {
+      return res.status(200).json([]);
+    }
+    const allOrders = snapshot.docs.map((doc) => {
+      const orderData = doc.data();
+      return {
+        id: orderData.orderId,
+        firestoreDocId: doc.id,
+        userId: orderData.userId,
+        userEmail: orderData.userEmail || "N/A",
+        foods: orderData.foods,
+        totalPrice: orderData.totalPrice,
+        address: orderData.address,
+        status: orderData.status,
+        createdAt: orderData.createdAt
+          .toDate()
+          .toLocaleString("ru-RU", { dateStyle: "short", timeStyle: "short" }),
+      };
+    });
+    res.status(200).json(allOrders);
+  } catch (error) {
+    logger.error("Ошибка при получении заказов для админа:", {
+      error: error.message,
+      stack: error.stack,
+    });
+    res
+      .status(500)
+      .json({
+        error: "Внутренняя ошибка сервера при получении заказов для админа.",
+      });
+  }
+});
+
+app.put(
+  "/api/admin/orders/:orderDocId/status",
+  authenticateToken,
+  isAdmin,
+  async (req, res) => {
+    const { orderDocId } = req.params;
+    const { status } = req.body;
+
+    if (!orderDocId || !status) {
+      return res
+        .status(400)
+        .json({ error: "ID заказа и новый статус обязательны." });
+    }
+
+    try {
+      const orderRef = db.collection("orders").doc(orderDocId);
+      const orderDoc = await orderRef.get();
+
+      if (!orderDoc.exists) {
+        return res.status(404).json({ error: "Заказ не найден." });
+      }
+
+      await orderRef.update({ status: status });
+
+      await db.collection("processed_activity_log").add({
+        type: "order_status_update",
+        orderId: orderDoc.data().orderId,
+        orderDocId: orderDocId,
+        newStatus: status,
+        adminUserId: req.user.uid,
+        adminEmail: req.user.email,
+        timestamp: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      logger.info(
+        `Статус заказа ${orderDoc.data().orderId} (Doc ID: ${orderDocId}) обновлен на "${status}" администратором ${req.user.email}`
+      );
+      res
+        .status(200)
+        .json({
+          message: "Статус заказа успешно обновлен.",
+          orderId: orderDoc.data().orderId,
+          newStatus: status,
+        });
+    } catch (error) {
+      logger.error(`Ошибка обновления статуса заказа ${orderDocId}:`, {
+        error: error.message,
+        stack: error.stack,
+      });
+      res
+        .status(500)
+        .json({
+          error: "Внутренняя ошибка сервера при обновлении статуса заказа.",
+        });
+    }
+  }
+);
+
+app.get(
+  "/api/admin/activity-log",
+  authenticateToken,
+  isAdmin,
+  async (req, res) => {
+    try {
+      const logSnapshot = await db
+        .collection("processed_activity_log")
+        .orderBy("timestamp", "desc")
+        .limit(100)
+        .get();
+      const logs = logSnapshot.docs.map((doc) => {
+        const data = doc.data();
+        const formattedTimestamp =
+          data.timestamp && data.timestamp.toDate
+            ? data.timestamp
+                .toDate()
+                .toLocaleString("ru-RU", {
+                  dateStyle: "medium",
+                  timeStyle: "medium",
+                })
+            : "N/A";
+        return {
+          id: doc.id,
+          ...data,
+          timestamp: formattedTimestamp,
+        };
+      });
+      res.json(logs);
+    } catch (error) {
+      logger.error("Ошибка при получении журнала активности:", {
+        error: error.message,
+        stack: error.stack,
+      });
+      res
+        .status(500)
+        .json({ error: "Не удалось загрузить журнал активности." });
+    }
+  }
+);
+
+app.get(
+  "/api/reports/orders-word",
+  authenticateToken,
+  isAdmin,
+  async (req, res) => {
+    const { year, month } = req.query;
+
+    if (!year || !month || isNaN(parseInt(year)) || isNaN(parseInt(month))) {
+      return res
+        .status(400)
+        .json({
+          error: "Год и месяц (1-12) обязательны и должны быть числами.",
+        });
+    }
+
+    const y = parseInt(year);
+    const m = parseInt(month);
+
+    if (m < 1 || m > 12) {
+      return res.status(400).json({ error: "Месяц должен быть от 1 до 12." });
+    }
+
+    const startDate = new Date(y, m - 1, 1, 0, 0, 0, 0);
+    const endDate = new Date(y, m, 1, 0, 0, 0, 0);
+
+    try {
+      const ordersSnapshot = await db
+        .collection("orders")
+        .where("createdAt", ">=", startDate)
+        .where("createdAt", "<", endDate)
+        .orderBy("createdAt", "asc")
+        .get();
+
+      let totalRevenue = 0;
+      let deliveredOrdersCount = 0;
+
+      const ordersData = ordersSnapshot.docs.map((docSnap) => {
+        const data = docSnap.data();
+        totalRevenue += data.totalPrice || 0;
+        if (data.status === "delivered") {
+          deliveredOrdersCount++;
+        }
+        return {
+          orderId: data.orderId || "N/A",
+          createdAt: data.createdAt.toDate().toLocaleDateString("ru-RU"),
+          totalPrice: data.totalPrice || 0,
+          address: data.address || "Не указан",
+          status: data.status || "N/A",
+          userEmail: data.userEmail || "N/A",
+        };
+      });
+
+      const routesSnapshot = await db
+        .collection("processed_activity_log")
+        .where("type", "==", "route_processing")
+        .where("timestamp", ">=", startDate)
+        .where("timestamp", "<", endDate)
+        .get();
+
+      let totalFuelCostForMonth = 0;
+      routesSnapshot.forEach((doc) => {
+        totalFuelCostForMonth += doc.data().calculatedFuelCost || 0;
+      });
+
+      const tableHeader = new TableRow({
+        children: [
+          new TableCell({
+            children: [
+              new Paragraph({ text: "ID Заказа", style: "tableHeader" }),
+            ],
+          }),
+          new TableCell({
+            children: [new Paragraph({ text: "Дата", style: "tableHeader" })],
+          }),
+          new TableCell({
+            children: [
+              new Paragraph({ text: "Email клиента", style: "tableHeader" }),
+            ],
+          }),
+          new TableCell({
+            children: [
+              new Paragraph({ text: "Сумма (руб.)", style: "tableHeader" }),
+            ],
+          }),
+          new TableCell({
+            children: [new Paragraph({ text: "Адрес", style: "tableHeader" })],
+          }),
+          new TableCell({
+            children: [new Paragraph({ text: "Статус", style: "tableHeader" })],
+          }),
+        ],
+        tableHeader: true,
+      });
+
+      const dataRows = ordersData.map(
+        (order) =>
+          new TableRow({
+            children: [
+              new TableCell({
+                children: [new Paragraph(String(order.orderId))],
+              }),
+              new TableCell({
+                children: [new Paragraph(String(order.createdAt))],
+              }),
+              new TableCell({
+                children: [new Paragraph(String(order.userEmail))],
+              }),
+              new TableCell({
+                children: [new Paragraph(String(order.totalPrice.toFixed(2)))],
+              }),
+              new TableCell({
+                children: [new Paragraph(String(order.address))],
+              }),
+              new TableCell({
+                children: [new Paragraph(String(order.status))],
+              }),
+            ],
+          })
+      );
+
+      const table = new Table({
+        rows: [tableHeader, ...dataRows],
+        width: { size: 100, type: WidthType.PERCENTAGE },
+      });
+
+      let logoImagePara = [];
+      const logoPath = path.join(__dirname, "logo.png");
+      if (fs.existsSync(logoPath)) {
+        const logoBuffer = fs.readFileSync(logoPath);
+        logoImagePara.push(
+          new Paragraph({
+            children: [
+              new ImageRun({
+                data: logoBuffer,
+                transformation: { width: 200, height: 67 },
+              }),
+            ],
+            alignment: AlignmentType.CENTER,
+          })
+        );
+      }
+
+      const doc = new Document({
+        styles: {
+          paragraphStyles: [
+            {
+              id: "tableHeader",
+              name: "Table Header Style",
+              basedOn: "Normal",
+              next: "Normal",
+              run: { bold: true, size: 22 }, // 11pt
+              paragraph: { spacing: { before: 120, after: 120 } },
+            },
+            {
+              id: "summaryText",
+              name: "Summary Text",
+              basedOn: "Normal",
+              run: { size: 24 }, // 12pt
+              paragraph: { spacing: { before: 240, after: 120 } },
+            },
+          ],
+        },
+        sections: [
+          {
+            properties: {},
+            children: [
+              ...logoImagePara,
+              new Paragraph({
+                children: [
+                  new TextRun({ text: "EasySelect", bold: true, size: 48 }),
+                ], // 24pt
+                heading: HeadingLevel.TITLE,
+                alignment: AlignmentType.CENTER,
+                spacing: { after: 300 },
+              }),
+              new Paragraph({
+                children: [
+                  new TextRun(
+                    `Отчет по заказам за ${String(m).padStart(2, "0")}.${y}`
+                  ),
+                ],
+                heading: HeadingLevel.HEADING_1,
+                alignment: AlignmentType.CENTER,
+                spacing: { after: 200 },
+              }),
+              new Paragraph({ text: "" }),
+              new Paragraph({
+                text: `Общее количество заказов: ${ordersData.length}`,
+                style: "summaryText",
+              }),
+              new Paragraph({
+                text: `Количество доставленных заказов: ${deliveredOrdersCount}`,
+                style: "summaryText",
+              }),
+              new Paragraph({
+                text: `Общая выручка по заказам: ${totalRevenue.toFixed(2)} руб.`,
+                style: "summaryText",
+              }),
+              new Paragraph({
+                text: `Общие затраты на топливо (по рассчитанным маршрутам): ${totalFuelCostForMonth.toFixed(2)} руб.`,
+                style: "summaryText",
+              }),
+              new Paragraph({
+                text: `Расчетная прибыль (Выручка - Топливо): ${(totalRevenue - totalFuelCostForMonth).toFixed(2)} руб. (без учета стоимости товаров и прочих расходов)`,
+                style: "summaryText",
+              }),
+              new Paragraph({ text: "" }),
+              ...(ordersData.length > 0
+                ? [table]
+                : [
+                    new Paragraph("Нет данных по заказам за указанный период."),
+                  ]),
+            ],
+          },
+        ],
+      });
+
+      const buffer = await Packer.toBuffer(doc);
+      const fileName = `Отчет_EasySelect_заказы_${y}_${String(m).padStart(2, "0")}.docx`;
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`
+      );
+      res.setHeader(
+        "Content-Type",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+      );
+      res.send(buffer);
+    } catch (error) {
+      logger.error("Ошибка при генерации отчета по заказам (Word):", {
+        error: error.message,
+        stack: error.stack,
+        year,
+        month,
+      });
+      if (
+        error.message &&
+        error.message.includes("The query requires an index.")
+      ) {
+        logger.error(
+          "FIRESTORE INDEX REQUIRED for orders report. Check Firestore console for link to create index on 'createdAt' (ASC or DESC)."
+        );
+      }
+      res
+        .status(500)
+        .json({ error: "Внутренняя ошибка сервера при генерации отчета." });
+    }
+  }
+);
 
 const PORT = process.env.PORT || 8080;
 
@@ -675,8 +1211,8 @@ const keepAlive = () => {
     async () => {
       try {
         await axios.get(pingUrl);
-        logger.info(`Ping успешно отправлен на ${pingUrl}`);
       } catch (error) {
+        logger.warn(`Keep-alive ping failed for ${pingUrl}: ${error.message}`);
       }
     },
     14 * 60 * 1000
@@ -697,5 +1233,7 @@ app.listen(PORT, () => {
   logger.info(`URL OSRM: ${OSRM_URL}`);
   logger.info(`Цена топлива: ${FUEL_PRICE}`);
   logger.info(`Расход топлива: ${FUEL_CONSUMPTION_RATE} л/100км`);
-  keepAlive();
+  if (process.env.NODE_ENV !== "development") {
+    keepAlive();
+  }
 });

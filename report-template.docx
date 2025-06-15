@@ -1,0 +1,24 @@
+Ежемесячный отчет по заказам EasySelect
+Период: {month_name} {year} г.
+Дата формирования: {date_generated}
+
+Общая информация:
+Количество заказов: {total_orders}
+Общая сумма по заказам: {total_amount} руб.
+
+{#has_orders}
+Детализация по заказам:
+{#orders}
+------------------------------------
+Заказ ID: {orderId}
+Дата создания: {createdAt}
+Клиент: {userFirstName} {userLastName} (Email: {userEmail})
+Адрес доставки: {address}
+Сумма заказа: {totalPrice} руб.
+Статус: {status}
+{/orders}
+{/has_orders}
+{!has_orders}
+{month}
+Заказов за указанный период не найдено.
+{/!has_orders}
