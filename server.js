@@ -1,5 +1,5 @@
 const express = require("express");
-const jwt = require("jsonwebtoken");
+const jwt =require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
 const admin = require("firebase-admin");
 const cors = require("cors");
@@ -10,23 +10,7 @@ const fs = require("fs");
 const axios = require("axios");
 const crypto = require("crypto");
 const winston = require("winston");
-const {
-  Document,
-  Packer,
-  Paragraph,
-  TextRun,
-  Table,
-  TableRow,
-  TableCell,
-  WidthType,
-  HeadingLevel,
-  AlignmentType,
-  ImageRun,
-  SectionType,
-  Header,
-  Footer,
-  PageNumber,
-} = require("docx");
+const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, HeadingLevel, AlignmentType, ImageRun } = require("docx");
 
 dotenv.config();
 
@@ -38,6 +22,7 @@ const requiredEnvVars = [
   "OSRM_URL",
   "FUEL_PRICE",
   "FUEL_CONSUMPTION_RATE",
+  "PASSWORD_RESET_SECRET" 
 ];
 
 for (const varName of requiredEnvVars) {
@@ -65,6 +50,7 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 const JWT_SECRET = process.env.JWT_SECRET;
+const PASSWORD_RESET_SECRET = process.env.PASSWORD_RESET_SECRET;
 const TRANSPORTER_USER = process.env.EMAIL_USER;
 const TRANSPORTER_PASS = process.env.EMAIL_PASS;
 
@@ -78,6 +64,7 @@ const transporter = nodemailer.createTransport({
 
 const CLIENT_REDIRECT_URL =
   process.env.CLIENT_REDIRECT_URL || "https://easy-select.vercel.app/succses";
+const CLIENT_RESET_PASSWORD_URL = process.env.CLIENT_RESET_PASSWORD_URL || "https://easy-select.vercel.app/reset-password";
 const SERVER_BASE_URL =
   process.env.SERVER_BASE_URL || "https://nodejs-server-sfel.onrender.com";
 
@@ -167,10 +154,12 @@ app.post("/signup", async (req, res) => {
     };
     const userDoc = await usersRef.add(newUser);
     await sendVerificationEmail(email, userDoc.id);
-    res.status(201).json({
-      message:
-        "Пользователь зарегистрирован успешно. Проверьте почту для подтверждения.",
-    });
+    res
+      .status(201)
+      .json({
+        message:
+          "Пользователь зарегистрирован успешно. Проверьте почту для подтверждения.",
+      });
   } catch (error) {
     logger.error("Ошибка при регистрации:", {
       error: error.message,
@@ -228,9 +217,11 @@ app.post("/login", async (req, res) => {
     const userDoc = snapshot.docs[0];
     const userData = userDoc.data();
     if (!userData.isVerified) {
-      return res.status(403).json({
-        error: "Пожалуйста, подтвердите свой email, прежде чем войти.",
-      });
+      return res
+        .status(403)
+        .json({
+          error: "Пожалуйста, подтвердите свой email, прежде чем войти.",
+        });
     }
     const isMatch = await bcrypt.compare(password, userData.password);
     if (!isMatch) {
@@ -256,6 +247,84 @@ app.post("/login", async (req, res) => {
     res.status(500).json({ error: "Внутренняя ошибка сервера." });
   }
 });
+
+
+app.post("/forgot-password", async (req, res) => {
+    const { email } = req.body;
+    if (!email) {
+        return res.status(400).json({ error: "Email обязателен." });
+    }
+    try {
+        const usersRef = db.collection("users");
+        const snapshot = await usersRef.where("email", "==", email).limit(1).get();
+        if (snapshot.empty) {
+            return res.status(404).json({ error: "Пользователь с таким email не найден." });
+        }
+        const userDoc = snapshot.docs[0];
+        const userId = userDoc.id;
+
+        const resetToken = jwt.sign({ uid: userId }, PASSWORD_RESET_SECRET, { expiresIn: "1h" });
+        const resetLink = `${CLIENT_RESET_PASSWORD_URL}?token=${resetToken}`;
+
+        const mailOptions = {
+            from: "EasySelect",
+            to: email,
+            subject: "Сброс пароля EasySelect",
+            html: `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Сброс пароля</title><style>body{font-family:'SF Pro Display',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Oxygen,Ubuntu,Cantarell,'Open Sans','Helvetica Neue',sans-serif;background-color:#f0f9f4;color:#000;margin:0;padding:0;line-height:1.7;}.container{max-width:560px;margin:32px auto;background-color:#fff;padding:48px;border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.08);border:1px solid rgba(0,0,0,.08)}.header{text-align:center;margin-bottom:40px}.header h1{font-size:2rem;font-weight:700;color:#10b981;margin-bottom:8px}.content p{font-size:1rem;color:#0622189d;margin-bottom:20px}.button-container{text-align:center}.button{display:inline-block;padding:14px 32px;font-size:1rem;font-weight:600;text-decoration:none;background-color:#10b981;color:#fff!important;border-radius:8px;transition:background-color .2s ease-in-out;}.button:hover{background-color:#059669;}.footer p{text-align:center;font-size:.875rem;color:rgba(0,0,0,.37);margin-top:32px}</style></head><body><div class="container"><div class="header"><h1>EasySelect</h1></div><div class="content"><p>Здравствуйте!</p><p>Вы запросили сброс пароля для вашего аккаунта. Пожалуйста, перейдите по ссылке ниже, чтобы установить новый пароль. Ссылка действительна в течение 1 часа.</p></div><div class="button-container"><a href="${resetLink}" class="button">Сбросить пароль</a></div><div class="content" style="margin-top: 20px;"><p>Если вы не запрашивали сброс пароля, просто проигнорируйте это письмо.</p></div><div class="footer"><p>С уважением, команда EasySelect</p></div></div></body></html>`,
+        };
+        await transporter.sendMail(mailOptions);
+        logger.info(`Письмо для сброса пароля отправлено: ${email}`);
+        res.status(200).json({ message: "Инструкции по сбросу пароля отправлены на ваш email." });
+
+    } catch (error) {
+        logger.error("Ошибка при запросе сброса пароля:", { error: error.message, stack: error.stack, email });
+        res.status(500).json({ error: "Внутренняя ошибка сервера." });
+    }
+});
+
+app.post("/reset-password", async (req, res) => {
+    const { token, newPassword, confirmPassword } = req.body;
+    if (!token || !newPassword || !confirmPassword) {
+        return res.status(400).json({ error: "Токен и пароли обязательны." });
+    }
+    if (newPassword !== confirmPassword) {
+        return res.status(400).json({ error: "Пароли не совпадают." });
+    }
+    if (newPassword.length < 6) { // Примерная проверка длины
+        return res.status(400).json({ error: "Пароль должен содержать не менее 6 символов." });
+    }
+
+    try {
+        const decoded = jwt.verify(token, PASSWORD_RESET_SECRET);
+        const userId = decoded.uid;
+
+        const userDocRef = db.collection("users").doc(userId);
+        const userDoc = await userDocRef.get();
+
+        if (!userDoc.exists) {
+            return res.status(404).json({ error: "Пользователь не найден или токен недействителен." });
+        }
+
+        const salt = await bcrypt.genSalt(10);
+        const hashedPassword = await bcrypt.hash(newPassword, salt);
+
+        await userDocRef.update({ password: hashedPassword });
+
+        logger.info(`Пароль для пользователя ${userId} успешно сброшен.`);
+        res.status(200).json({ message: "Пароль успешно изменен. Теперь вы можете войти с новым паролем." });
+
+    } catch (error) {
+        logger.error("Ошибка при сбросе пароля:", { error: error.message, stack: error.stack });
+        if (error.name === 'TokenExpiredError') {
+            return res.status(400).json({ error: "Срок действия токена истек. Пожалуйста, запросите сброс пароля снова." });
+        }
+        if (error.name === 'JsonWebTokenError') {
+            return res.status(400).json({ error: "Недействительный токен. Пожалуйста, проверьте ссылку или запросите сброс пароля снова." });
+        }
+        res.status(500).json({ error: "Внутренняя ошибка сервера." });
+    }
+});
+
 
 const authenticateToken = (req, res, next) => {
   const authHeader = req.headers["authorization"];
@@ -331,10 +400,12 @@ app.post("/orders", authenticateToken, async (req, res) => {
       logger.warn(
         `У пользователя ${userId} не указан адрес в профиле при создании заказа.`
       );
-      return res.status(400).json({
-        error:
-          "Адрес доставки не указан в вашем профиле. Пожалуйста, обновите данные.",
-      });
+      return res
+        .status(400)
+        .json({
+          error:
+            "Адрес доставки не указан в вашем профиле. Пожалуйста, обновите данные.",
+        });
     }
     const randomDigits = Math.floor(Math.random() * 900 + 100).toString();
     const randomHexChar = crypto.randomBytes(1).toString("hex")[0];
@@ -348,22 +419,22 @@ app.post("/orders", authenticateToken, async (req, res) => {
       totalPrice,
       address: userAddress,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      status: "pending", // Initial status
+      status: "pending", 
     };
     const newOrderRef = db.collection("orders").doc();
     await newOrderRef.set(orderData);
-
+    
     const logOrderCreation = {
-      type: "order_creation",
-      orderId: generatedOrderId,
-      userId: userId,
-      userEmail: userData.email,
-      totalPrice: orderData.totalPrice,
-      address: orderData.address,
-      status: "created",
-      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+        type: 'order_creation',
+        orderId: generatedOrderId,
+        userId: userId,
+        userEmail: userData.email,
+        totalPrice: orderData.totalPrice,
+        address: orderData.address,
+        status: 'created',
+        timestamp: admin.firestore.FieldValue.serverTimestamp()
     };
-    await db.collection("processed_activity_log").add(logOrderCreation);
+    await db.collection('processed_activity_log').add(logOrderCreation);
 
     logger.info(
       `Заказ с ID #${generatedOrderId} для пользователя ${userId} успешно создан. Адрес: ${userAddress}`
@@ -378,15 +449,15 @@ app.post("/orders", authenticateToken, async (req, res) => {
       userId,
     });
     const logOrderFailure = {
-      type: "order_creation_failed",
-      userId: userId,
-      error: error.message,
-      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+        type: 'order_creation_failed',
+        userId: userId,
+        error: error.message,
+        timestamp: admin.firestore.FieldValue.serverTimestamp()
     };
     try {
-      await db.collection("processed_activity_log").add(logOrderFailure);
+        await db.collection('processed_activity_log').add(logOrderFailure);
     } catch (logError) {
-      logger.error("Ошибка при логировании неудачи создания заказа:", logError);
+        logger.error("Ошибка при логировании неудачи создания заказа:", logError);
     }
     res
       .status(500)
@@ -437,16 +508,64 @@ app.get("/orders", authenticateToken, async (req, res) => {
       logger.error(
         "ОШИБКА FIRESTORE: Требуется композитный индекс для /orders. Ссылка для создания должна быть в предыдущем логе ошибки."
       );
-      return res.status(500).json({
-        error:
-          "Ошибка базы данных: отсутствует необходимый индекс. Проверьте логи сервера.",
-      });
+      return res
+        .status(500)
+        .json({
+          error:
+            "Ошибка базы данных: отсутствует необходимый индекс. Проверьте логи сервера.",
+        });
     }
     res
       .status(500)
       .json({ error: "Внутренняя ошибка сервера при получении заказов." });
   }
 });
+
+
+app.get("/user/address", authenticateToken, async (req, res) => {
+    const userId = req.user.uid;
+    try {
+        const userDocRef = db.collection("users").doc(userId);
+        const userDoc = await userDocRef.get();
+        if (!userDoc.exists) {
+            return res.status(404).json({ error: "Пользователь не найден." });
+        }
+        const userData = userDoc.data();
+        res.json({ address: userData.address || null });
+    } catch (error) {
+        logger.error("Ошибка при получении адреса пользователя:", { error: error.message, userId });
+        res.status(500).json({ error: "Внутренняя ошибка сервера." });
+    }
+});
+
+app.put("/user/address", authenticateToken, async (req, res) => {
+    const userId = req.user.uid;
+    const { newAddress } = req.body;
+
+    if (!newAddress || typeof newAddress !== 'string' || newAddress.trim() === "") {
+        return res.status(400).json({ error: "Новый адрес не может быть пустым." });
+    }
+
+    try {
+        const userDocRef = db.collection("users").doc(userId);
+        await userDocRef.update({ address: newAddress.trim() });
+        
+        await db.collection('processed_activity_log').add({
+            type: 'user_address_update',
+            userId: userId,
+            userEmail: req.user.email, 
+            newAddress: newAddress.trim(),
+            timestamp: admin.firestore.FieldValue.serverTimestamp()
+        });
+
+        logger.info(`Адрес пользователя ${userId} (${req.user.email}) обновлен на: ${newAddress.trim()}`);
+        res.json({ message: "Адрес успешно обновлен.", address: newAddress.trim() });
+    } catch (error) {
+        logger.error("Ошибка при обновлении адреса пользователя:", { error: error.message, userId, newAddress });
+        res.status(500).json({ error: "Внутренняя ошибка сервера при обновлении адреса." });
+    }
+});
+
 
 const calculateDistanceByRoad = async (loc1, loc2) => {
   if (
@@ -611,10 +730,12 @@ app.post(
       logger.error(
         `[${requestId}] Ошибка OSRM при расчете матрицы расстояний.`
       );
-      return res.status(503).json({
-        error:
-          "Ошибка сервиса маршрутизации. Не удалось рассчитать все сегменты.",
-      });
+      return res
+        .status(503)
+        .json({
+          error:
+            "Ошибка сервиса маршрутизации. Не удалось рассчитать все сегменты.",
+        });
     }
 
     const { minDistance: tspMinDistance, bestPathIndices } =
@@ -667,21 +788,19 @@ app.post(
     }
 
     const finalFuelCost = calculateFuelCost(totalActualRouteDistance);
-
+    
     const logRouteProcessing = {
-      type: "route_processing",
-      requestId: requestId,
-      adminUserId: req.user.uid,
-      pointsCount: points.length,
-      optimalPointOrderNames: bestPathIndices.map(
-        (index) => points[index].name
-      ),
-      calculatedDistance: parseFloat(totalActualRouteDistance.toFixed(2)),
-      calculatedFuelCost: parseFloat(finalFuelCost.toFixed(2)),
-      timestamp: admin.firestore.FieldValue.serverTimestamp(),
-      status: "success",
+        type: 'route_processing',
+        requestId: requestId,
+        adminUserId: req.user.uid,
+        pointsCount: points.length,
+        optimalPointOrderNames: bestPathIndices.map((index) => points[index].name),
+        calculatedDistance: parseFloat(totalActualRouteDistance.toFixed(2)),
+        calculatedFuelCost: parseFloat(finalFuelCost.toFixed(2)),
+        timestamp: admin.firestore.FieldValue.serverTimestamp(),
+        status: 'success'
     };
-    await db.collection("processed_activity_log").add(logRouteProcessing);
+    await db.collection('processed_activity_log').add(logRouteProcessing);
 
     logger.info(
       `[${requestId}] Маршрут рассчитан: ${totalActualRouteDistance.toFixed(2)} км, топливо: ${finalFuelCost.toFixed(2)}`
@@ -713,87 +832,62 @@ const geocodeAddressOnServer = async (address) => {
       lon: parseFloat(item.lon),
     };
   } catch (error) {
-    logger.error(
-      `Nominatim (server) geocoding error for address "${address}": ${error.message}`
-    );
+    logger.error(`Nominatim (server) geocoding error for address "${address}": ${error.message}`);
     return null;
   }
 };
 
-app.get(
-  "/api/logistics/bases",
-  authenticateToken,
-  isAdmin,
-  async (req, res) => {
-    try {
-      const basesSnapshot = await db
-        .collection("logistics_bases")
-        .orderBy("name")
-        .get();
-      const basesList = basesSnapshot.docs.map((doc) => ({
-        id: doc.id,
-        ...doc.data(),
-      }));
-      res.json(basesList);
-    } catch (error) {
-      logger.error("Ошибка получения списка баз из Firestore:", error);
-      res.status(500).json({ error: "Не удалось получить список баз." });
-    }
+app.get("/api/logistics/bases", authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const basesSnapshot = await db.collection('logistics_bases').orderBy('name').get();
+    const basesList = basesSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    res.json(basesList);
+  } catch (error) {
+    logger.error('Ошибка получения списка баз из Firestore:', error);
+    res.status(500).json({ error: 'Не удалось получить список баз.' });
   }
-);
+});
 
-app.post(
-  "/api/logistics/bases",
-  authenticateToken,
-  isAdmin,
-  async (req, res) => {
-    const { name, address } = req.body;
-    if (!name || typeof name !== "string" || name.trim() === "") {
-      return res.status(400).json({ error: "Название базы обязательно." });
+app.post("/api/logistics/bases", authenticateToken, isAdmin, async (req, res) => {
+  const { name, address } = req.body;
+  if (!name || typeof name !== "string" || name.trim() === "") {
+    return res.status(400).json({ error: "Название базы обязательно." });
+  }
+  if (!address || typeof address !== "string" || address.trim() === "") {
+    return res.status(400).json({ error: "Адрес базы обязателен." });
+  }
+
+  try {
+    const geocoded = await geocodeAddressOnServer(address.trim());
+    if (!geocoded) {
+      return res.status(400).json({ error: `Не удалось геокодировать адрес: ${address}. Проверьте корректность адреса.` });
     }
-    if (!address || typeof address !== "string" || address.trim() === "") {
-      return res.status(400).json({ error: "Адрес базы обязателен." });
-    }
 
-    try {
-      const geocoded = await geocodeAddressOnServer(address.trim());
-      if (!geocoded) {
-        return res
-          .status(400)
-          .json({
-            error: `Не удалось геокодировать адрес: ${address}. Проверьте корректность адреса.`,
-          });
-      }
-
-      const newBaseData = {
-        name: name.trim(),
-        addressString: address.trim(),
-        geocodedAddress: geocoded.geocodedAddress,
-        lat: geocoded.lat,
-        lon: geocoded.lon,
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      };
-      const newBaseRef = await db
-        .collection("logistics_bases")
-        .add(newBaseData);
-
-      await db.collection("processed_activity_log").add({
-        type: "base_added",
+    const newBaseData = {
+      name: name.trim(),
+      addressString: address.trim(),
+      geocodedAddress: geocoded.geocodedAddress,
+      lat: geocoded.lat,
+      lon: geocoded.lon,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+    const newBaseRef = await db.collection('logistics_bases').add(newBaseData);
+    
+    await db.collection('processed_activity_log').add({
+        type: 'base_added',
         baseId: newBaseRef.id,
         baseName: newBaseData.name,
         adminUserId: req.user.uid,
-        timestamp: admin.firestore.FieldValue.serverTimestamp(),
-      });
-      logger.info(
-        `Добавлена база: ${newBaseData.name} по адресу: ${newBaseData.addressString} (ID: ${newBaseRef.id})`
-      );
-      res.status(201).json({ id: newBaseRef.id, ...newBaseData });
-    } catch (error) {
-      logger.error("Ошибка добавления базы в Firestore:", error);
-      res.status(500).json({ error: "Не удалось добавить базу." });
-    }
+        timestamp: admin.firestore.FieldValue.serverTimestamp()
+    });
+    logger.info(`Добавлена база: ${newBaseData.name} по адресу: ${newBaseData.addressString} (ID: ${newBaseRef.id})`);
+    res.status(201).json({ id: newBaseRef.id, ...newBaseData });
+  } catch (error) {
+    logger.error('Ошибка добавления базы в Firestore:', error);
+    res.status(500).json({ error: 'Не удалось добавить базу.' });
   }
-);
+});
+
 
 let serverVehicles = [{ id: "vehicle_default_1", name: "Газель A123BC" }];
 app.get("/api/logistics/vehicles", authenticateToken, isAdmin, (req, res) => {
@@ -810,396 +904,257 @@ app.post("/api/logistics/vehicles", authenticateToken, isAdmin, (req, res) => {
   res.status(201).json(newVehicle);
 });
 
-app.get("/api/admin/orders", authenticateToken, isAdmin, async (req, res) => {
-  try {
-    const ordersRef = db.collection("orders");
-    const snapshot = await ordersRef
-      .where("status", "!=", "delivered")
-      .orderBy("status")
-      .orderBy("createdAt", "desc")
-      .get();
 
-    if (snapshot.empty) {
-      return res.status(200).json([]);
+app.get('/api/admin/orders', authenticateToken, isAdmin, async (req, res) => {
+    try {
+        const ordersRef = db.collection('orders');
+        const snapshot = await ordersRef
+                                .where('status', '!=', 'delivered') 
+                                .orderBy('status') 
+                                .orderBy('createdAt', 'desc')
+                                .get();
+
+        if (snapshot.empty) {
+            return res.status(200).json([]);
+        }
+        const allOrders = snapshot.docs.map(doc => {
+            const orderData = doc.data();
+            return {
+                id: orderData.orderId,
+                firestoreDocId: doc.id,
+                userId: orderData.userId,
+                userEmail: orderData.userEmail || 'N/A',
+                foods: orderData.foods,
+                totalPrice: orderData.totalPrice,
+                address: orderData.address,
+                status: orderData.status,
+                createdAt: orderData.createdAt.toDate().toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short'}),
+            };
+        });
+        res.status(200).json(allOrders);
+    } catch (error) {
+        logger.error('Ошибка при получении заказов для админа:', { error: error.message, stack: error.stack });
+        res.status(500).json({ error: 'Внутренняя ошибка сервера при получении заказов для админа.' });
     }
-    const allOrders = snapshot.docs.map((doc) => {
-      const orderData = doc.data();
-      return {
-        id: orderData.orderId,
-        firestoreDocId: doc.id,
-        userId: orderData.userId,
-        userEmail: orderData.userEmail || "N/A",
-        foods: orderData.foods,
-        totalPrice: orderData.totalPrice,
-        address: orderData.address,
-        status: orderData.status,
-        createdAt: orderData.createdAt
-          .toDate()
-          .toLocaleString("ru-RU", { dateStyle: "short", timeStyle: "short" }),
-      };
-    });
-    res.status(200).json(allOrders);
-  } catch (error) {
-    logger.error("Ошибка при получении заказов для админа:", {
-      error: error.message,
-      stack: error.stack,
-    });
-    res
-      .status(500)
-      .json({
-        error: "Внутренняя ошибка сервера при получении заказов для админа.",
-      });
-  }
 });
 
-app.put(
-  "/api/admin/orders/:orderDocId/status",
-  authenticateToken,
-  isAdmin,
-  async (req, res) => {
+app.put('/api/admin/orders/:orderDocId/status', authenticateToken, isAdmin, async (req, res) => {
     const { orderDocId } = req.params;
     const { status } = req.body;
 
     if (!orderDocId || !status) {
-      return res
-        .status(400)
-        .json({ error: "ID заказа и новый статус обязательны." });
+        return res.status(400).json({ error: 'ID заказа и новый статус обязательны.'});
     }
 
     try {
-      const orderRef = db.collection("orders").doc(orderDocId);
-      const orderDoc = await orderRef.get();
+        const orderRef = db.collection('orders').doc(orderDocId);
+        const orderDoc = await orderRef.get();
 
-      if (!orderDoc.exists) {
-        return res.status(404).json({ error: "Заказ не найден." });
-      }
+        if (!orderDoc.exists) {
+            return res.status(404).json({ error: 'Заказ не найден.' });
+        }
 
-      await orderRef.update({ status: status });
+        await orderRef.update({ status: status });
 
-      await db.collection("processed_activity_log").add({
-        type: "order_status_update",
-        orderId: orderDoc.data().orderId,
-        orderDocId: orderDocId,
-        newStatus: status,
-        adminUserId: req.user.uid,
-        adminEmail: req.user.email,
-        timestamp: admin.firestore.FieldValue.serverTimestamp(),
-      });
-
-      logger.info(
-        `Статус заказа ${orderDoc.data().orderId} (Doc ID: ${orderDocId}) обновлен на "${status}" администратором ${req.user.email}`
-      );
-      res
-        .status(200)
-        .json({
-          message: "Статус заказа успешно обновлен.",
-          orderId: orderDoc.data().orderId,
-          newStatus: status,
+        await db.collection('processed_activity_log').add({
+            type: 'order_status_update',
+            orderId: orderDoc.data().orderId,
+            orderDocId: orderDocId,
+            newStatus: status,
+            adminUserId: req.user.uid,
+            adminEmail: req.user.email,
+            timestamp: admin.firestore.FieldValue.serverTimestamp()
         });
+        
+        logger.info(`Статус заказа ${orderDoc.data().orderId} (Doc ID: ${orderDocId}) обновлен на "${status}" администратором ${req.user.email}`);
+        res.status(200).json({ message: 'Статус заказа успешно обновлен.', orderId: orderDoc.data().orderId, newStatus: status });
+
     } catch (error) {
-      logger.error(`Ошибка обновления статуса заказа ${orderDocId}:`, {
-        error: error.message,
-        stack: error.stack,
-      });
-      res
-        .status(500)
-        .json({
-          error: "Внутренняя ошибка сервера при обновлении статуса заказа.",
-        });
+        logger.error(`Ошибка обновления статуса заказа ${orderDocId}:`, { error: error.message, stack: error.stack });
+        res.status(500).json({ error: 'Внутренняя ошибка сервера при обновлении статуса заказа.'});
     }
-  }
-);
+});
 
-app.get(
-  "/api/admin/activity-log",
-  authenticateToken,
-  isAdmin,
-  async (req, res) => {
+
+app.get('/api/admin/activity-log', authenticateToken, isAdmin, async (req, res) => {
     try {
-      const logSnapshot = await db
-        .collection("processed_activity_log")
-        .orderBy("timestamp", "desc")
-        .limit(100)
-        .get();
-      const logs = logSnapshot.docs.map((doc) => {
-        const data = doc.data();
-        const formattedTimestamp =
-          data.timestamp && data.timestamp.toDate
-            ? data.timestamp
-                .toDate()
-                .toLocaleString("ru-RU", {
-                  dateStyle: "medium",
-                  timeStyle: "medium",
-                })
-            : "N/A";
-        return {
-          id: doc.id,
-          ...data,
-          timestamp: formattedTimestamp,
-        };
-      });
-      res.json(logs);
+        const logSnapshot = await db.collection('processed_activity_log')
+                                    .orderBy('timestamp', 'desc')
+                                    .limit(100)
+                                    .get();
+        const logs = logSnapshot.docs.map(doc => {
+            const data = doc.data();
+            const formattedTimestamp = data.timestamp && data.timestamp.toDate ? 
+                                       data.timestamp.toDate().toLocaleString('ru-RU', { dateStyle: 'medium', timeStyle: 'medium'}) : 
+                                       'N/A';
+            return {
+                id: doc.id,
+                ...data,
+                timestamp: formattedTimestamp,
+            };
+        });
+        res.json(logs);
     } catch (error) {
-      logger.error("Ошибка при получении журнала активности:", {
-        error: error.message,
-        stack: error.stack,
-      });
-      res
-        .status(500)
-        .json({ error: "Не удалось загрузить журнал активности." });
+        logger.error('Ошибка при получении журнала активности:', { error: error.message, stack: error.stack });
+        res.status(500).json({ error: 'Не удалось загрузить журнал активности.' });
     }
-  }
-);
+});
 
-app.get(
-  "/api/reports/orders-word",
-  authenticateToken,
-  isAdmin,
-  async (req, res) => {
+app.get('/api/reports/orders-word', authenticateToken, isAdmin, async (req, res) => {
     const { year, month } = req.query;
 
     if (!year || !month || isNaN(parseInt(year)) || isNaN(parseInt(month))) {
-      return res
-        .status(400)
-        .json({
-          error: "Год и месяц (1-12) обязательны и должны быть числами.",
-        });
+        return res.status(400).json({ error: "Год и месяц (1-12) обязательны и должны быть числами." });
     }
 
     const y = parseInt(year);
     const m = parseInt(month);
 
     if (m < 1 || m > 12) {
-      return res.status(400).json({ error: "Месяц должен быть от 1 до 12." });
+        return res.status(400).json({ error: "Месяц должен быть от 1 до 12." });
     }
-
-    const startDate = new Date(y, m - 1, 1, 0, 0, 0, 0);
-    const endDate = new Date(y, m, 1, 0, 0, 0, 0);
+    
+    const startDate = new Date(y, m - 1, 1, 0, 0, 0, 0); 
+    const endDate = new Date(y, m, 1, 0, 0, 0, 0); 
 
     try {
-      const ordersSnapshot = await db
-        .collection("orders")
-        .where("createdAt", ">=", startDate)
-        .where("createdAt", "<", endDate)
-        .orderBy("createdAt", "asc")
-        .get();
+        const ordersSnapshot = await db.collection('orders')
+            .where('createdAt', '>=', startDate)
+            .where('createdAt', '<', endDate)
+            .orderBy('createdAt', 'asc')
+            .get();
 
-      let totalRevenue = 0;
-      let deliveredOrdersCount = 0;
+        let totalRevenue = 0;
+        let deliveredOrdersCount = 0;
 
-      const ordersData = ordersSnapshot.docs.map((docSnap) => {
-        const data = docSnap.data();
-        totalRevenue += data.totalPrice || 0;
-        if (data.status === "delivered") {
-          deliveredOrdersCount++;
+        const ordersData = ordersSnapshot.docs.map(docSnap => {
+            const data = docSnap.data();
+            totalRevenue += data.totalPrice || 0;
+            if (data.status === 'delivered') {
+                deliveredOrdersCount++;
+            }
+            return {
+                orderId: data.orderId || 'N/A',
+                createdAt: data.createdAt.toDate().toLocaleDateString('ru-RU'),
+                totalPrice: data.totalPrice || 0,
+                address: data.address || 'Не указан',
+                status: data.status || 'N/A',
+                userEmail: data.userEmail || 'N/A'
+            };
+        });
+        
+        const routesSnapshot = await db.collection('processed_activity_log')
+            .where('type', '==', 'route_processing')
+            .where('timestamp', '>=', startDate)
+            .where('timestamp', '<', endDate)
+            .get();
+
+        let totalFuelCostForMonth = 0;
+        routesSnapshot.forEach(doc => {
+            totalFuelCostForMonth += doc.data().calculatedFuelCost || 0;
+        });
+
+        const tableHeader = new TableRow({
+            children: [
+                new TableCell({ children: [new Paragraph({ text: "ID Заказа", style: "tableHeader" })] }),
+                new TableCell({ children: [new Paragraph({ text: "Дата", style: "tableHeader" })] }),
+                new TableCell({ children: [new Paragraph({ text: "Email клиента", style: "tableHeader" })] }),
+                new TableCell({ children: [new Paragraph({ text: "Сумма (руб.)", style: "tableHeader" })] }),
+                new TableCell({ children: [new Paragraph({ text: "Адрес", style: "tableHeader" })] }),
+                new TableCell({ children: [new Paragraph({ text: "Статус", style: "tableHeader" })] }),
+            ],
+            tableHeader: true,
+        });
+
+        const dataRows = ordersData.map(order => new TableRow({
+            children: [
+                new TableCell({ children: [new Paragraph(String(order.orderId))] }),
+                new TableCell({ children: [new Paragraph(String(order.createdAt))] }),
+                new TableCell({ children: [new Paragraph(String(order.userEmail))] }),
+                new TableCell({ children: [new Paragraph(String(order.totalPrice.toFixed(2)))] }),
+                new TableCell({ children: [new Paragraph(String(order.address))] }),
+                new TableCell({ children: [new Paragraph(String(order.status))] }),
+            ],
+        }));
+        
+        const table = new Table({
+            rows: [tableHeader, ...dataRows],
+            width: { size: 100, type: WidthType.PERCENTAGE },
+        });
+
+        let logoImagePara = [];
+        const logoPath = path.join(__dirname, 'logo.png'); 
+        if (fs.existsSync(logoPath)) {
+            const logoBuffer = fs.readFileSync(logoPath);
+            logoImagePara.push(new Paragraph({
+                children: [new ImageRun({ data: logoBuffer, transformation: { width: 200, height: 67 } })], 
+                alignment: AlignmentType.CENTER,
+            }));
         }
-        return {
-          orderId: data.orderId || "N/A",
-          createdAt: data.createdAt.toDate().toLocaleDateString("ru-RU"),
-          totalPrice: data.totalPrice || 0,
-          address: data.address || "Не указан",
-          status: data.status || "N/A",
-          userEmail: data.userEmail || "N/A",
-        };
-      });
 
-      const routesSnapshot = await db
-        .collection("processed_activity_log")
-        .where("type", "==", "route_processing")
-        .where("timestamp", ">=", startDate)
-        .where("timestamp", "<", endDate)
-        .get();
-
-      let totalFuelCostForMonth = 0;
-      routesSnapshot.forEach((doc) => {
-        totalFuelCostForMonth += doc.data().calculatedFuelCost || 0;
-      });
-
-      const tableHeader = new TableRow({
-        children: [
-          new TableCell({
-            children: [
-              new Paragraph({ text: "ID Заказа", style: "tableHeader" }),
-            ],
-          }),
-          new TableCell({
-            children: [new Paragraph({ text: "Дата", style: "tableHeader" })],
-          }),
-          new TableCell({
-            children: [
-              new Paragraph({ text: "Email клиента", style: "tableHeader" }),
-            ],
-          }),
-          new TableCell({
-            children: [
-              new Paragraph({ text: "Сумма (руб.)", style: "tableHeader" }),
-            ],
-          }),
-          new TableCell({
-            children: [new Paragraph({ text: "Адрес", style: "tableHeader" })],
-          }),
-          new TableCell({
-            children: [new Paragraph({ text: "Статус", style: "tableHeader" })],
-          }),
-        ],
-        tableHeader: true,
-      });
-
-      const dataRows = ordersData.map(
-        (order) =>
-          new TableRow({
-            children: [
-              new TableCell({
-                children: [new Paragraph(String(order.orderId))],
-              }),
-              new TableCell({
-                children: [new Paragraph(String(order.createdAt))],
-              }),
-              new TableCell({
-                children: [new Paragraph(String(order.userEmail))],
-              }),
-              new TableCell({
-                children: [new Paragraph(String(order.totalPrice.toFixed(2)))],
-              }),
-              new TableCell({
-                children: [new Paragraph(String(order.address))],
-              }),
-              new TableCell({
-                children: [new Paragraph(String(order.status))],
-              }),
-            ],
-          })
-      );
-
-      const table = new Table({
-        rows: [tableHeader, ...dataRows],
-        width: { size: 100, type: WidthType.PERCENTAGE },
-      });
-
-      let logoImagePara = [];
-      const logoPath = path.join(__dirname, "logo.png");
-      if (fs.existsSync(logoPath)) {
-        const logoBuffer = fs.readFileSync(logoPath);
-        logoImagePara.push(
-          new Paragraph({
-            children: [
-              new ImageRun({
-                data: logoBuffer,
-                transformation: { width: 200, height: 67 },
-              }),
-            ],
-            alignment: AlignmentType.CENTER,
-          })
-        );
-      }
-
-      const doc = new Document({
-        styles: {
-          paragraphStyles: [
-            {
-              id: "tableHeader",
-              name: "Table Header Style",
-              basedOn: "Normal",
-              next: "Normal",
-              run: { bold: true, size: 22 }, // 11pt
-              paragraph: { spacing: { before: 120, after: 120 } },
-            },
-            {
-              id: "summaryText",
-              name: "Summary Text",
-              basedOn: "Normal",
-              run: { size: 24 }, // 12pt
-              paragraph: { spacing: { before: 240, after: 120 } },
-            },
-          ],
-        },
-        sections: [
-          {
-            properties: {},
-            children: [
-              ...logoImagePara,
-              new Paragraph({
-                children: [
-                  new TextRun({ text: "EasySelect", bold: true, size: 48 }),
-                ], // 24pt
-                heading: HeadingLevel.TITLE,
-                alignment: AlignmentType.CENTER,
-                spacing: { after: 300 },
-              }),
-              new Paragraph({
-                children: [
-                  new TextRun(
-                    `Отчет по заказам за ${String(m).padStart(2, "0")}.${y}`
-                  ),
+        const doc = new Document({
+            styles: {
+                paragraphStyles: [
+                    {
+                        id: "tableHeader",
+                        name: "Table Header Style",
+                        basedOn: "Normal",
+                        next: "Normal",
+                        run: { bold: true, size: 22 }, 
+                        paragraph: { spacing: { before: 120, after: 120 } }
+                    },
+                    {
+                        id: "summaryText",
+                        name: "Summary Text",
+                        basedOn: "Normal",
+                        run: { size: 24 }, 
+                        paragraph: { spacing: { before: 240, after: 120 } }
+                    }
                 ],
-                heading: HeadingLevel.HEADING_1,
-                alignment: AlignmentType.CENTER,
-                spacing: { after: 200 },
-              }),
-              new Paragraph({ text: "" }),
-              new Paragraph({
-                text: `Общее количество заказов: ${ordersData.length}`,
-                style: "summaryText",
-              }),
-              new Paragraph({
-                text: `Количество доставленных заказов: ${deliveredOrdersCount}`,
-                style: "summaryText",
-              }),
-              new Paragraph({
-                text: `Общая выручка по заказам: ${totalRevenue.toFixed(2)} руб.`,
-                style: "summaryText",
-              }),
-              new Paragraph({
-                text: `Общие затраты на топливо (по рассчитанным маршрутам): ${totalFuelCostForMonth.toFixed(2)} руб.`,
-                style: "summaryText",
-              }),
-              new Paragraph({
-                text: `Расчетная прибыль (Выручка - Топливо): ${(totalRevenue - totalFuelCostForMonth).toFixed(2)} руб. (без учета стоимости товаров и прочих расходов)`,
-                style: "summaryText",
-              }),
-              new Paragraph({ text: "" }),
-              ...(ordersData.length > 0
-                ? [table]
-                : [
-                    new Paragraph("Нет данных по заказам за указанный период."),
-                  ]),
-            ],
-          },
-        ],
-      });
+            },
+            sections: [{
+                properties: {},
+                children: [
+                    ...logoImagePara,
+                    new Paragraph({
+                        children: [new TextRun({ text: "EasySelect", bold: true, size: 48 })], 
+                        heading: HeadingLevel.TITLE,
+                        alignment: AlignmentType.CENTER,
+                        spacing: { after: 300 }
+                    }),
+                    new Paragraph({
+                        children: [new TextRun(`Отчет по заказам за ${String(m).padStart(2, '0')}.${y}`)],
+                        heading: HeadingLevel.HEADING_1,
+                        alignment: AlignmentType.CENTER,
+                        spacing: { after: 200 }
+                    }),
+                    new Paragraph({ text: "" }),
+                    new Paragraph({ text: `Общее количество заказов: ${ordersData.length}`, style: "summaryText" }),
+                    new Paragraph({ text: `Количество доставленных заказов: ${deliveredOrdersCount}`, style: "summaryText" }),
+                    new Paragraph({ text: `Общая выручка по заказам: ${totalRevenue.toFixed(2)} руб.`, style: "summaryText" }),
+                    new Paragraph({ text: `Общие затраты на топливо (по рассчитанным маршрутам): ${totalFuelCostForMonth.toFixed(2)} руб.`, style: "summaryText" }),
+                    new Paragraph({ text: `Расчетная прибыль (Выручка - Топливо): ${(totalRevenue - totalFuelCostForMonth).toFixed(2)} руб. (без учета стоимости товаров и прочих расходов)`, style: "summaryText" }),
+                    new Paragraph({ text: "" }),
+                    ...(ordersData.length > 0 ? [table] : [new Paragraph("Нет данных по заказам за указанный период.")])
+                ],
+            }],
+        });
 
-      const buffer = await Packer.toBuffer(doc);
-      const fileName = `Отчет_EasySelect_заказы_${y}_${String(m).padStart(2, "0")}.docx`;
-      res.setHeader(
-        "Content-Disposition",
-        `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`
-      );
-      res.setHeader(
-        "Content-Type",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-      );
-      res.send(buffer);
+        const buffer = await Packer.toBuffer(doc);
+        const fileName = `Отчет_EasySelect_заказы_${y}_${String(m).padStart(2,'0')}.docx`;
+        res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`);
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+        res.send(buffer);
+
     } catch (error) {
-      logger.error("Ошибка при генерации отчета по заказам (Word):", {
-        error: error.message,
-        stack: error.stack,
-        year,
-        month,
-      });
-      if (
-        error.message &&
-        error.message.includes("The query requires an index.")
-      ) {
-        logger.error(
-          "FIRESTORE INDEX REQUIRED for orders report. Check Firestore console for link to create index on 'createdAt' (ASC or DESC)."
-        );
-      }
-      res
-        .status(500)
-        .json({ error: "Внутренняя ошибка сервера при генерации отчета." });
+        logger.error('Ошибка при генерации отчета по заказам (Word):', { error: error.message, stack: error.stack, year, month });
+        if (error.message && error.message.includes("The query requires an index.")) {
+             logger.error("FIRESTORE INDEX REQUIRED for orders report. Check Firestore console for link to create index on 'createdAt' (ASC or DESC).");
+        }
+        res.status(500).json({ error: 'Внутренняя ошибка сервера при генерации отчета.' });
     }
-  }
-);
+});
+
 
 const PORT = process.env.PORT || 8080;
 
@@ -1212,7 +1167,7 @@ const keepAlive = () => {
       try {
         await axios.get(pingUrl);
       } catch (error) {
-        logger.warn(`Keep-alive ping failed for ${pingUrl}: ${error.message}`);
+         logger.warn(`Keep-alive ping failed for ${pingUrl}: ${error.message}`);
       }
     },
     14 * 60 * 1000
@@ -1233,7 +1188,7 @@ app.listen(PORT, () => {
   logger.info(`URL OSRM: ${OSRM_URL}`);
   logger.info(`Цена топлива: ${FUEL_PRICE}`);
   logger.info(`Расход топлива: ${FUEL_CONSUMPTION_RATE} л/100км`);
-  if (process.env.NODE_ENV !== "development") {
+  if (process.env.NODE_ENV !== 'development') {
     keepAlive();
   }
 });
